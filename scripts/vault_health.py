@@ -7,6 +7,7 @@ Audits an Obsidian vault for structural issues:
 - Orphaned notes (no incoming links)
 - Stale tasks (overdue, no recent activity)
 - Notes missing frontmatter
+- Notes with frontmatter trapped in a leading ```markdown code fence (unwrap, do not add)
 - Empty folders
 - Broken internal links
 - Templates left in notes (unfilled Templater syntax)
@@ -19,6 +20,7 @@ Usage:
 import argparse
 import json
 import re
+import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -26,6 +28,12 @@ from pathlib import Path
 TODAY = date.today()
 EXCLUDE_DIRS = {".obsidian", ".trash", "_trash", ".git", "Templates"}
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
+# A note whose entire body was accidentally saved inside a ```markdown code fence:
+# the first non-blank line opens a fence and the real frontmatter (---) lives INSIDE it.
+# This must be detected separately from genuinely-missing frontmatter, because the naive
+# "add frontmatter" fix prepends a SECOND frontmatter block and leaves the body trapped
+# in the fence (double corruption). The correct fix is to UNWRAP, not to add.
+CODE_FENCE_WRAP_RE = re.compile(r"\A\s*```[^\n]*\n\s*---\s*\n")
 LINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
 DATE_RE = re.compile(r"due:\s*(\d{4}-\d{2}-\d{2})")
 TEMPLATE_RE = re.compile(r"<%.*?%>")
@@ -60,6 +68,7 @@ def load_vault(vault: Path) -> dict:
             "content": content,
             "frontmatter": frontmatter,
             "has_frontmatter": bool(fm_match),
+            "code_fence_wrapped": bool(not fm_match and CODE_FENCE_WRAP_RE.match(content)),
             "links": links,
             "aliases": parse_aliases(frontmatter),
             "due": due_match.group(1) if due_match else None,
@@ -158,11 +167,34 @@ def check_missing_frontmatter(notes: dict) -> list:
             continue
         if rel in ("Home.md", "_CLAUDE.md"):
             continue
+        if note.get("code_fence_wrapped"):
+            # Reported by check_code_fence_wrapped instead. The frontmatter exists but is
+            # trapped in a code fence - adding a new block here would duplicate it.
+            continue
         if not note["has_frontmatter"] and note["size"] > 50:
             issues.append({
                 "type": "no_frontmatter",
                 "severity": "warning",
                 "message": f"Missing frontmatter: {rel}",
+                "files": [rel],
+            })
+    return issues
+
+
+def check_code_fence_wrapped(notes: dict) -> list:
+    """Notes whose frontmatter + body were accidentally saved inside a leading ```markdown
+    code fence. Flagged separately (and as an error) because the fix is to UNWRAP the fence,
+    NOT to add frontmatter - the naive add-frontmatter fix produces duplicate frontmatter."""
+    issues = []
+    skip = {"Templates", "_trash", ".obsidian"}
+    for rel, note in notes.items():
+        if any(s in rel for s in skip):
+            continue
+        if note.get("code_fence_wrapped"):
+            issues.append({
+                "type": "code_fence_wrapped",
+                "severity": "error",
+                "message": f"Frontmatter trapped in a code fence - unwrap, don't add: {rel}",
                 "files": [rel],
             })
     return issues
@@ -261,14 +293,16 @@ def check_template_leftovers(notes: dict) -> list:
 
 
 def run_health_check(vault: Path) -> dict:
-    print(f"🔍 Scanning vault: {vault}\n")
+    # Progress goes to stderr so `--json` stdout is clean and machine-parseable.
+    print(f"🔍 Scanning vault: {vault}\n", file=sys.stderr)
     notes = load_vault(vault)
-    print(f"   Found {len(notes)} notes\n")
+    print(f"   Found {len(notes)} notes\n", file=sys.stderr)
 
     checks = [
         ("Duplicates", check_duplicates(notes)),
         ("Orphans", check_orphans(notes)),
         ("Stale tasks", check_stale_tasks(notes)),
+        ("Code-fence-wrapped notes", check_code_fence_wrapped(notes)),
         ("Missing frontmatter", check_missing_frontmatter(notes)),
         ("Empty folders", check_empty_folders(vault)),
         ("Broken links", check_broken_links(notes, vault)),
