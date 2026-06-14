@@ -11,7 +11,7 @@ Use the obsidian-second-brain skill. Execute `/obsidian-health`:
    (replace vault path with the one from `_CLAUDE.md`)
 3. Parse the JSON output and split findings into categories
 4. Spawn parallel subagents to handle each category simultaneously:
-   - **Links agent**: verify broken links, attempt to resolve them
+   - **Links agent**: verify broken links and attempt to resolve them. For dangling links that point to a note which does not exist, run the triage loop `python scripts/triage_links.py --path <vault> --limit N` to sort each one into keep (a deliberate seed), create (a real note worth writing now), or delete (junk or a typo). Report-only by default; needs `ANTHROPIC_API_KEY`. This loop is headless on purpose: it can run unattended or on a schedule, so the vault gets maintained when you are not sitting in a chat session.
    - **Duplicates agent**: confirm duplicates are truly the same concept, not just similar names
    - **Frontmatter agent**: identify notes missing required fields by type. If the script reports a `code_fence_wrapped` note (frontmatter trapped inside a leading ```` ```markdown ```` fence), the fix is to **unwrap it** - strip the opening fence line and the matching closing ```` ``` ```` so the inner `---` frontmatter and body become real markdown. **Never add a new frontmatter block to a wrapped note** - that produces duplicate frontmatter and leaves the body trapped. If the note already has both a prepended frontmatter block and an inner wrapped one, merge them (keep the richer fields) and unwrap.
    - **Staleness agent**: check overdue tasks and unfilled template syntax
