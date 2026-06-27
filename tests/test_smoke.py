@@ -346,6 +346,33 @@ def test_link_graph_builds_nodes_edges_and_orphans(tmp_path):
     assert graph["stats"]["top_hubs"][0]["title"] in {"Hub", "Leaf"}
 
 
+def test_semantic_search_math_and_carveout(monkeypatch):
+    """Semantic layer's stdlib math is correct without needing a model: cosine
+    behaves, hybrid RRF lifts a note strong in BOTH rankings, and the privacy
+    carve-out excludes configured path prefixes."""
+    import importlib
+    sys.path.insert(0, str(REPO_ROOT / "scripts/eval"))
+    monkeypatch.setenv("OBSIDIAN_EMBED_EXCLUDE", "wiki/private/,Faith")
+    ss = importlib.reload(importlib.import_module("semantic_search"))
+
+    assert ss.cosine([1, 2, 3], [1, 2, 3]) == 1.0
+    assert ss.cosine([1, 0], [0, 1]) == 0.0
+    assert round(ss.cosine([1, 0], [-1, 0]), 3) == -1.0
+
+    # carve-out: configured prefixes never get embedded
+    assert ss._excluded("wiki/private/diary.md")
+    assert ss._excluded("Faith/prayer.md")
+    assert not ss._excluded("wiki/projects/Codru.md")
+
+    # hybrid RRF: a note present in both rankings outranks one present in only one
+    monkeypatch.setattr(ss, "semantic_search",
+                        lambda q, idx, limit=10: [{"path": "both", "title": "both", "score": .9},
+                                                  {"path": "sem_only", "title": "s", "score": .7}])
+    lexical = [{"path": "both", "title": "both"}, {"path": "lex_only", "title": "l"}]
+    fused = ss.hybrid_search("q", {"notes": {}}, lexical, limit=3)
+    assert fused[0]["path"] == "both", [f["path"] for f in fused]
+
+
 def test_mcp_vault_ops_read_guards_path_escape(tmp_path, monkeypatch):
     """read_note must refuse paths that escape the vault root."""
     vault_ops = _load_vault_ops()

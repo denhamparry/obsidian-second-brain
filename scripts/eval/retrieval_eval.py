@@ -198,7 +198,29 @@ def _rank_of_gold(results: list[dict[str, Any]], gold: list[str]) -> int:
     return 0
 
 
-def evaluate(cases_path: Path, as_json: bool) -> int:
+def _searcher(mode: str):
+    """Return a (label, fn(query)->results) for the chosen retrieval mode."""
+    if mode == "lexical":
+        return "term-frequency, title-weighted (vault_ops.search)", \
+            lambda q: vault_ops.search(q, limit=SEARCH_LIMIT)
+    import semantic_search as ss  # local module; needs Ollama running
+    vault = vault_ops.resolve_vault()
+    if not ss.ollama_available():
+        raise SystemExit(
+            "Semantic/hybrid mode needs the local model runtime. Install Ollama "
+            f"(https://ollama.com), then: ollama pull {ss.EMBED_MODEL}, then "
+            "build the index: uv run python scripts/eval/semantic_search.py --path <vault> --build"
+        )
+    index = ss.load_index(vault)
+    if mode == "semantic":
+        return f"local embeddings: {index.get('model')} (semantic_search)", \
+            lambda q: ss.semantic_search(q, index, limit=SEARCH_LIMIT)
+    # hybrid
+    return f"hybrid: lexical + {index.get('model')} (RRF)", \
+        lambda q: ss.hybrid_search(q, index, vault_ops.search(q, limit=SEARCH_LIMIT), limit=SEARCH_LIMIT)
+
+
+def evaluate(cases_path: Path, as_json: bool, mode: str = "lexical") -> int:
     if not cases_path.exists():
         print(
             f"No cases file at {cases_path}.\n"
@@ -211,9 +233,10 @@ def evaluate(cases_path: Path, as_json: bool) -> int:
         print("Cases file is empty.", file=sys.stderr)
         return 1
 
+    label, search_fn = _searcher(mode)
     per_case: list[dict[str, Any]] = []
     for c in cases:
-        results = vault_ops.search(c["q"], limit=SEARCH_LIMIT)
+        results = search_fn(c["q"])
         rank = _rank_of_gold(results, c.get("gold", []))
         top = results[0]["path"] if results else None
         per_case.append({
@@ -232,7 +255,7 @@ def evaluate(cases_path: Path, as_json: bool) -> int:
 
     summary = {
         "cases": n,
-        "search": "term-frequency, title-weighted (vault_ops.search)",
+        "search": label,
         "recall_at": {str(k): round(recall[k], 3) for k in RECALL_KS},
         "mrr": round(mrr, 3),
         "misses": len(misses),
@@ -277,11 +300,14 @@ def main() -> int:
     ap.add_argument("--cases", type=Path, default=DEFAULT_CASES,
                     help=f"Cases JSONL path (default: {DEFAULT_CASES})")
     ap.add_argument("--json", action="store_true", help="Emit JSON instead of a text report")
+    ap.add_argument("--mode", choices=("lexical", "semantic", "hybrid"), default="lexical",
+                    help="Retrieval to score: lexical (word-match, default), semantic "
+                         "(local embeddings), or hybrid (both fused). semantic/hybrid need Ollama.")
     args = ap.parse_args()
 
     if args.generate is not None:
         return generate(args.generate, args.cases, args.style)
-    return evaluate(args.cases, args.json)
+    return evaluate(args.cases, args.json, args.mode)
 
 
 if __name__ == "__main__":
