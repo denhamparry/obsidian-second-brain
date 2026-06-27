@@ -10,6 +10,7 @@ with type/date/tags/ai-first, a `## For future Claude` preamble, and a
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from datetime import datetime
@@ -47,6 +48,9 @@ _SEARCH_DEWEIGHT_PREFIXES = ("raw/",)
 _SEARCH_DEWEIGHT_FILES = {"log.md"}
 # Tunable so retrieval changes can be A/B-measured (set to 1.0 to disable the penalty).
 _SEARCH_DEWEIGHT_FACTOR = float(os.environ.get("OBSIDIAN_SEARCH_DEWEIGHT", "0.15"))
+
+# BM25-style sublinear-TF + length normalization. Env-toggle for A/B (0 = old raw counts).
+_SEARCH_LENGTH_NORM = os.environ.get("OBSIDIAN_SEARCH_LENGTHNORM", "1") != "0"
 
 # Bounds keep search fast and reads safe.
 _MAX_FILES_SCANNED = 2000
@@ -86,10 +90,24 @@ def search(query: str, *, limit: int = 6) -> List[Dict[str, Any]]:
             continue
         low = text.lower()
         title_low = md.stem.lower()
-        score = 0
+        # Sublinear term frequency + length normalization (BM25-style): a note that
+        # repeats a term 50 times in passing should not outrank a short note that has
+        # the term in its title. log1p saturates repeated mentions; dividing the body
+        # contribution by a length factor stops long notes winning on sheer volume.
+        # Title matches stay a strong, length-independent signal.
+        length_norm = 1.0 + math.log1p(len(low) / 1000.0)
+        title_score = 0.0
+        body_score = 0.0
         for t in terms:
-            score += low.count(t)
-            score += 5 * title_low.count(t)  # title matches weighted
+            tc = title_low.count(t)
+            if tc:
+                title_score += 5.0 * (1.0 + math.log1p(tc))
+            bc = low.count(t)
+            if bc:
+                body_score += 1.0 + math.log1p(bc)
+        score = title_score + (body_score / length_norm) if _SEARCH_LENGTH_NORM else float(
+            sum(low.count(t) + 5 * title_low.count(t) for t in terms)
+        )
         if score:
             rel = md.relative_to(vault).as_posix()
             if rel in _SEARCH_DEWEIGHT_FILES or rel.startswith(_SEARCH_DEWEIGHT_PREFIXES):

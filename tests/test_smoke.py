@@ -289,6 +289,34 @@ def test_mcp_vault_ops_save_read_search_roundtrip(tmp_path, monkeypatch):
     assert any(h["path"] == rel for h in hits)
 
 
+def test_mcp_vault_ops_search_ranks_title_over_noise(tmp_path, monkeypatch):
+    """Search ranking regression guard (retrieval-eval fixes): a short note with the
+    term in its title must outrank a long note that merely repeats it, and stopwords
+    must not let a long note win on filler. Locks the stopword + sublinear-TF +
+    length-normalization behavior so it cannot silently regress."""
+    vault_ops = _load_vault_ops()
+    vault = tmp_path / "vault"
+    (vault / "wiki").mkdir(parents=True)
+    monkeypatch.setenv("OBSIDIAN_VAULT_PATH", str(vault))
+
+    # The canonical answer: short, term in the title.
+    (vault / "wiki" / "Velo Migration.md").write_text(
+        "---\ntype: project\n---\nThe Velo migration plan.\n", encoding="utf-8"
+    )
+    # A long, noisy note that repeats the term and is full of stopwords.
+    noise = ("What is the status of the work that we did and the things " * 80) + ("velo " * 20)
+    (vault / "wiki" / "Standup Log.md").write_text(
+        "---\ntype: meeting\n---\n" + noise, encoding="utf-8"
+    )
+
+    hits = vault_ops.search("what is the status of the velo migration", limit=5)
+    assert hits, "search returned nothing"
+    assert hits[0]["path"] == "wiki/Velo Migration.md", (
+        "short title-matching note should rank first, not the long noisy note: "
+        + ", ".join(h["path"] for h in hits)
+    )
+
+
 def test_mcp_vault_ops_read_guards_path_escape(tmp_path, monkeypatch):
     """read_note must refuse paths that escape the vault root."""
     vault_ops = _load_vault_ops()
