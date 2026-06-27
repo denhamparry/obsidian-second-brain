@@ -32,6 +32,7 @@ import math
 import os
 import re
 import sys
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -43,7 +44,11 @@ EXCLUDE_PREFIXES = tuple(
 )
 SKIP_DIRS = {".obsidian", ".git", ".trash", "_trash", ".claude", "_export", "templates", "node_modules"}
 INDEX_FILE = ".obsidian-semantic-index.json"  # written at vault root
-_MAX_CHARS = 8000  # cap note text sent to the model (first N chars carry the gist)
+# Embedding models have a token limit (mxbai-embed-large ~512 tokens). Long notes
+# must be split into safe chunks and averaged, or the model 500s. ~1200 chars sits
+# well under the limit; capping the chunk count bounds time on huge notes.
+_CHUNK_CHARS = 1200
+_MAX_CHUNKS = 8
 
 
 # --------------------------------------------------------------------------- #
@@ -57,24 +62,68 @@ def ollama_available() -> bool:
         return False
 
 
+_RETRY_WAITS = (1, 3, 8, 15)  # a local model on a laptop can briefly 500 under rapid load
+
+
 def embed(text: str) -> list[float]:
-    """Return the embedding vector for one text via the local Ollama model."""
-    payload = json.dumps({"model": EMBED_MODEL, "prompt": text[:_MAX_CHARS]}).encode()
-    req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/embeddings", data=payload, headers={"Content-Type": "application/json"}
+    """Return the embedding vector for one text via the local Ollama model.
+
+    Retries transient errors (HTTP 5xx, connection resets): a local model on a
+    laptop can buckle under rapid sequential calls, then recover a second later.
+    `keep_alive` holds the model in memory so it does not unload/reload between
+    calls and thrash. The last failure is raised so the caller can skip the note.
+    """
+    payload = json.dumps(
+        {"model": EMBED_MODEL, "prompt": text[:_CHUNK_CHARS], "keep_alive": "15m"}
+    ).encode()
+    last_err: Exception | None = None
+    for attempt in range(len(_RETRY_WAITS) + 1):
+        try:
+            req = urllib.request.Request(
+                f"{OLLAMA_URL}/api/embeddings", data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = json.loads(r.read())
+            vec = data.get("embedding")
+            if vec:
+                return vec
+            last_err = RuntimeError(
+                f"Ollama returned no embedding (is '{EMBED_MODEL}' pulled? run: ollama pull {EMBED_MODEL})"
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            last_err = e
+        if attempt < len(_RETRY_WAITS):
+            time.sleep(_RETRY_WAITS[attempt])
+    raise RuntimeError(
+        f"Local model at {OLLAMA_URL} failed after retries ({last_err}). "
+        f"Is Ollama running and '{EMBED_MODEL}' pulled?"
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            data = json.loads(r.read())
-    except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"Could not reach the local model at {OLLAMA_URL} ({e}). "
-            f"Install Ollama (https://ollama.com), then run: ollama pull {EMBED_MODEL}"
-        ) from e
-    vec = data.get("embedding")
-    if not vec:
-        raise RuntimeError(f"Ollama returned no embedding (is '{EMBED_MODEL}' pulled? run: ollama pull {EMBED_MODEL})")
-    return vec
+
+
+def _mean_pool(vectors: list[list[float]]) -> list[float]:
+    """Average several chunk vectors into one note vector (component-wise)."""
+    if not vectors:
+        return []
+    if len(vectors) == 1:
+        return vectors[0]
+    dim = len(vectors[0])
+    n = len(vectors)
+    return [sum(v[i] for v in vectors) / n for i in range(dim)]
+
+
+def embed_note(text: str) -> list[float]:
+    """Embed a whole note: split into safe-sized chunks, embed each, average them.
+
+    A note longer than the model's token limit cannot be embedded in one call, so
+    we chunk it and mean-pool - representing the entire note, not just its opening.
+    Chunk count is capped so a giant transcript stays fast (the cap still covers
+    ~9600 chars, far more than any preamble + first sections)."""
+    text = text.strip()
+    if not text:
+        return []
+    chunks = [text[i:i + _CHUNK_CHARS] for i in range(0, len(text), _CHUNK_CHARS)][:_MAX_CHUNKS]
+    return _mean_pool([embed(c) for c in chunks])
 
 
 # --------------------------------------------------------------------------- #
@@ -122,7 +171,7 @@ def build_index(vault: Path, verbose: bool = True) -> dict:
             cache = {}
     old = cache.get("notes", {})
     new: dict = {}
-    embedded = reused = skipped = 0
+    embedded = reused = skipped = failed = 0
 
     for md in _iter_notes(vault):
         rel = md.relative_to(vault).as_posix()
@@ -139,9 +188,21 @@ def build_index(vault: Path, verbose: bool = True) -> dict:
             new[rel] = prev
             reused += 1
             continue
-        new[rel] = {"hash": h, "title": md.stem, "vec": embed(text)}
+        # An empty/whitespace-only note has no body to embed; fall back to its title
+        # (which still carries meaning) so it stays findable. Skip only if even that is empty.
+        embed_text = text if text.strip() else md.stem
+        if not embed_text.strip():
+            continue
+        try:
+            vec = embed_note(embed_text)
+        except Exception as e:  # one bad note must not abort a 1000-note run
+            failed += 1
+            if verbose:
+                print(f"  [skip] {rel}: {e}", file=sys.stderr)
+            continue
+        new[rel] = {"hash": h, "title": md.stem, "vec": vec}
         embedded += 1
-        if verbose and embedded % 25 == 0:
+        if verbose and embedded % 50 == 0:
             print(f"  embedded {embedded} notes...", file=sys.stderr)
 
     out = {"model": EMBED_MODEL, "notes": new}
@@ -149,7 +210,7 @@ def build_index(vault: Path, verbose: bool = True) -> dict:
     if verbose:
         print(
             f"[semantic] indexed {len(new)} notes ({embedded} new, {reused} cached, "
-            f"{skipped} excluded) -> {index_path}",
+            f"{skipped} excluded, {failed} failed) -> {index_path}",
             file=sys.stderr,
         )
     return out
