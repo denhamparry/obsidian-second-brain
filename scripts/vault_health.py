@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -77,22 +78,56 @@ def load_vault(vault: Path) -> dict:
     return notes
 
 
+# Folders whose notes recur by date with a shared descriptive title (e.g. a
+# "Weekly Review" every Friday). Same title across dates is expected here, not a
+# duplicate, so they are exempt from duplicate detection (issue #82).
+DATED_SERIES_FOLDERS = {"daily", "logs", "dev logs", "reviews"}
+
+
+def _norm_title(stem: str) -> str:
+    """Normalize a filename stem to a comparable title. Keeps digits and dates -
+    the old version stripped ISO dates, which collapsed every dated note in a
+    series onto one bucket and flagged them all as duplicates (issue #82)."""
+    norm = re.sub(r"[^a-z0-9 ]", " ", stem.lower())
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _max_pairwise_similarity(notes: dict, files: list) -> float:
+    """Largest body-text similarity ratio among a set of notes (first 1000 chars).
+    Used as the content signal that separates real duplicates from notes that
+    merely share a title."""
+    bodies = [notes[f]["content"][:1000] for f in files]
+    best = 0.0
+    for i in range(len(bodies)):
+        for j in range(i + 1, len(bodies)):
+            best = max(best, difflib.SequenceMatcher(None, bodies[i], bodies[j]).ratio())
+    return best
+
+
 def check_duplicates(notes: dict) -> list:
     issues = []
-    stems = defaultdict(list)
+    groups = defaultdict(list)
     for rel, note in notes.items():
-        norm = re.sub(r"\d{4}-\d{2}-\d{2}", "", note["stem"]).lower()
-        norm = re.sub(r"[^a-z0-9 ]", " ", norm).strip()
-        norm = re.sub(r"\s+", " ", norm)
-        stems[norm].append(rel)
-    for norm, files in stems.items():
-        if len(files) > 1 and norm.strip():
-            issues.append({
-                "type": "duplicate",
-                "severity": "warning",
-                "message": f"Possible duplicates: {norm!r}",
-                "files": files,
-            })
+        parts = [p.lower() for p in rel.split("/")[:-1]]
+        if any(p in DATED_SERIES_FOLDERS for p in parts):
+            continue
+        norm = _norm_title(note["stem"])
+        if norm:
+            groups[norm].append(rel)
+    for norm, files in groups.items():
+        if len(files) <= 1:
+            continue
+        # Content signal: high body similarity => likely a real duplicate
+        # (warning); low => same title but different content (info, less noise).
+        similar = _max_pairwise_similarity(notes, files) >= 0.6
+        issues.append({
+            "type": "duplicate",
+            "severity": "warning" if similar else "info",
+            "message": (
+                f"{'Likely duplicates' if similar else 'Same title, different content'}: {norm!r}"
+            ),
+            "files": files,
+        })
     return issues
 
 
@@ -223,6 +258,17 @@ def check_empty_folders(vault: Path) -> list:
 _EM_DASH, _EN_DASH = "\u2014", "\u2013"
 
 
+CODE_FENCE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+
+def _strip_code(text: str) -> str:
+    """Remove fenced code blocks and inline code so example/placeholder wikilinks
+    inside them (`[[wikilinks]]`, `[[Related Project]]`) are not scanned as real
+    links (issue #82)."""
+    return INLINE_CODE_RE.sub("", CODE_FENCE_BLOCK_RE.sub("", text))
+
+
 def _normalize_dashes(s: str) -> str:
     """Convert em-dash (U+2014) and en-dash (U+2013) to a regular hyphen.
 
@@ -256,7 +302,13 @@ def check_broken_links(notes: dict, vault: Path) -> list:
     for rel, note in notes.items():
         if Path(rel).name in SKIP_FROM_LINK_SCAN:
             continue
-        for link in note["links"]:
+        # Re-extract links from code-stripped content so example wikilinks inside
+        # code fences / inline code are not flagged as broken (issue #82).
+        real_links = [
+            link.strip().rstrip("\\")
+            for link in LINK_RE.findall(_strip_code(note["content"]))
+        ]
+        for link in real_links:
             link_stem = Path(link).stem.lower() if "/" in link else link.lower()
             link_norm = link_stem.replace("-", " ").replace("_", " ")
             link_dash_norm = _normalize_dashes(link_stem)

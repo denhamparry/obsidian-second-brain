@@ -183,6 +183,54 @@ def test_health_normalizes_dashes_in_links(tmp_path):
     )
 
 
+def _run_health_json(tmp_path):
+    """Run vault_health.py --json and return the parsed result (skips the stdout header)."""
+    result = subprocess.run(
+        [sys.executable, "scripts/vault_health.py", "--path", str(tmp_path), "--json"],
+        cwd=REPO_ROOT, check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout[result.stdout.index("{"):])
+
+
+def test_health_duplicates_exempt_dated_series(tmp_path):
+    """Issue #82: dated-series notes that share a descriptive title (a weekly
+    review every Friday) must NOT be flagged as duplicates, but two genuinely
+    same-named notes in normal folders still are."""
+    reviews = tmp_path / "Reviews"
+    reviews.mkdir()
+    for d in ("2026-06-19", "2026-06-26"):
+        (reviews / f"{d} - Weekly Review.md").write_text(
+            f"---\ntype: review\n---\n# Weekly Review\nWeek of {d}.\n", encoding="utf-8"
+        )
+    # A real cross-folder duplicate with near-identical content.
+    (tmp_path / "A").mkdir()
+    (tmp_path / "B").mkdir()
+    body = "---\ntype: note\n---\n# Onboarding\nStep one, step two, step three.\n"
+    (tmp_path / "A" / "Onboarding.md").write_text(body, encoding="utf-8")
+    (tmp_path / "B" / "Onboarding.md").write_text(body, encoding="utf-8")
+
+    data = _run_health_json(tmp_path)
+    dup_msgs = [i["message"] for i in data["issues"] if i["type"] == "duplicate"]
+    assert not any("weekly review" in m.lower() for m in dup_msgs), dup_msgs
+    assert any("onboarding" in m.lower() for m in dup_msgs), dup_msgs
+
+
+def test_health_broken_links_ignore_code_examples(tmp_path):
+    """Issue #82: example wikilinks inside code fences / inline code must not be
+    flagged broken; a real dangling link in prose still is."""
+    (tmp_path / "Doc.md").write_text(
+        "---\ntype: note\n---\n# Doc\n\n"
+        "Use a link like ```\n[[Related Project]]\n``` or inline `[[Placeholder]]`.\n\n"
+        "But this real one dangles: [[Nonexistent Target]].\n",
+        encoding="utf-8",
+    )
+    data = _run_health_json(tmp_path)
+    broken = [i["message"] for i in data["issues"] if i["type"] == "broken_link"]
+    assert any("Nonexistent Target" in m for m in broken), broken
+    assert not any("Related Project" in m or "Placeholder" in m for m in broken), broken
+
+
 def _load_vault_ops():
     """Import the MCP connector's vault_ops module (pure stdlib, no mcp dep)."""
     import importlib
