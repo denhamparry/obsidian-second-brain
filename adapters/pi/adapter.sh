@@ -136,6 +136,13 @@ and this discovery skill (`/skill:obsidian-second-brain`).
    confidence levels where applicable.
 4. If `_CLAUDE.md` is missing, run `/obsidian-init` to generate it.
 
+## Universal vault-write safety
+EOF
+
+    emit_core_write_contract "$src/SKILL.md"
+
+    cat <<'EOF'
+
 ## Command routing table
 EOF
 

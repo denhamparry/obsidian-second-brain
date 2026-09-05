@@ -68,6 +68,13 @@ load only when a skill is selected (progressive disclosure).
 4. Do not invent skills. If none matches, ask the user or fall back to plain
    natural-language help.
 
+## Universal vault-write safety
+EOF
+
+    emit_core_write_contract "$src/SKILL.md"
+
+    cat <<'EOF'
+
 ## Scripts
 
 Python helpers live under \`.codex/scripts/\`. They run via

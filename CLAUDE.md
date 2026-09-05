@@ -12,9 +12,14 @@ If you are Claude operating on a user's vault, you want `_CLAUDE.md` inside thei
 - `references/` - shared specs that commands link to. **`ai-first-rules.md` is the canonical vault-write spec** and is non-negotiable.
 - `scripts/` - Python helpers (`bootstrap_vault.py`, `vault_health.py`, the `research/` toolkit), plus `build.sh` (the adapter orchestrator) and `lib.sh`.
 - `adapters/` - platform translation layer. `lib.sh` holds shared parsing helpers. `claude-code/`, `codex-cli/`, `gemini-cli/`, `opencode/`, `hermes/`, `pi/` each ship an `adapter.sh`.
+  Every non-Claude runtime surface must emit the canonical optimistic-concurrency
+  section from `SKILL.md`; never maintain a separate safety-contract copy in an
+  adapter.
 - `dist/` - build output, one tree per platform. **Gitignored.** Regenerate with `bash scripts/build.sh` (all platforms) or `bash scripts/build.sh --platform <name>`.
 - `hooks/` - Claude Code hooks shipped with the skill.
-- `SKILL.md` - full operating manual loaded by Claude when the skill activates.
+- `SKILL.md` - concise always-loaded router and universal vault safety rules.
+  Focused procedures live in `references/`; canonical command bodies live in
+  `commands/`.
 - `architecture.md` - how the layers fit together.
 - `README.md` - public-facing docs on github.com.
 - `pyproject.toml` - Python deps managed via `uv`.
@@ -52,7 +57,8 @@ If you are editing a command file in `commands/`, do not rewrite the AI-first pr
 2. If it runs Python, add `scripts/research/<name>.py` (or appropriate subfolder).
 3. **Apply the AI-first rule to every vault write.** Reference `references/ai-first-rules.md` from the command body so future-Claude has the spec inline.
 4. If the command produces a new note type, add its frontmatter schema to `references/ai-first-rules.md`.
-5. Update `SKILL.md` (Layer section + command list) and `README.md` (commands table).
+5. Update `references/command-routing.md` and the `README.md` command table. The
+   routing-completeness test must still map every command exactly once.
 6. Add a `CHANGELOG.md` entry under "Unreleased".
 
 ## Testing locally
@@ -66,7 +72,10 @@ ln -s commands/* ~/.claude/commands/
 
 Then restart Claude Code and run the command against a test vault. Command behavior itself is still verified manually: run the command, inspect the resulting vault notes, confirm AI-first compliance.
 
-There is a smoke-test suite (`tests/test_smoke.py`) that guards the build pipeline (adapter output paths, `vault_health` JSON, OKF export, and similar). CI runs it on every push. Run it locally before pushing any change to `adapters/`, `scripts/`, or `commands/`:
+The pytest suite guards the build pipeline, vault helpers, concise router,
+command-route completeness, and concurrent-write contract. CI runs it on every
+push. Run it locally before pushing changes to the skill, references, adapters,
+scripts, or commands:
 
 ```bash
 uv run pytest -q

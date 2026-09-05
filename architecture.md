@@ -1,8 +1,8 @@
 # obsidian-second-brain - architecture
 
-How the layers fit together. This document describes the system: its components, how they connect, and how data flows from a slash command to a vault note. For the per-command operating manual see `SKILL.md`; for the contributor rules see `CLAUDE.md`.
+How the layers fit together. This document describes the system: its components, how they connect, and how data flows from a slash command to a vault note. `SKILL.md` is the concise router and universal safety contract; `commands/` contains the per-command procedures and `references/` contains focused shared guidance. For contributor rules see `CLAUDE.md`.
 
-Last reviewed against commit `ff0319c` (2026-06-05).
+Last reviewed against commit `bf63932` (2026-09-05).
 
 ---
 
@@ -46,7 +46,7 @@ The AI-first vault rule ties it all together: every note a command writes is des
 | `dist/` | Build output, one tree per platform. Gitignored. Regenerate with `scripts/build.sh`. |
 | `tests/` | Smoke tests and fixtures, run in CI. |
 | `examples/sample-vault/` | Fictional AI-first notes that show what good output looks like. |
-| `SKILL.md` | Full operating manual loaded when the skill activates. |
+| `SKILL.md` | Concise router and universal safety contract loaded when the skill activates. |
 | `architecture.md` | This document. |
 | `README.md` | Public-facing docs on github.com. |
 | `pyproject.toml` | Python dependencies, managed via `uv`. |
@@ -158,7 +158,7 @@ Hooks enforce the rules mechanically instead of relying on the model to remember
 
 Scheduled maintenance is a usage pattern, not a set of bundled cron files. The skill does not ship `.plist` or crontab artifacts; instead the user tells Claude which commands to run on what cadence and Claude Code's scheduling system runs them autonomously. Typical uses: a morning daily-note + overdue-task pull, a nightly end-of-day summary, a weekly review, a periodic `/obsidian-health` audit.
 
-Headless gotcha (documented in `SKILL.md`): custom slash commands do not expand in non-interactive mode. A cron or launchd job must point at the underlying command logic or a wrapper rather than relying on slash-command expansion, and launchd jobs must set an explicit `PATH` because launchd strips the environment.
+Headless gotcha (documented in `references/scheduled-agents.md`): custom slash commands do not expand in non-interactive mode. A cron or launchd job must point at the underlying command logic or a wrapper rather than relying on slash-command expansion, and launchd jobs must set an explicit `PATH` because launchd strips the environment.
 
 ---
 

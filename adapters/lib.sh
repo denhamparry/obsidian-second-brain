@@ -254,6 +254,19 @@ _emit_one_trigger_category() {
       done
 }
 
+# Emit the canonical optimistic-concurrency section from the source skill.
+# Runtime adapters call this instead of maintaining platform-specific copies of
+# the vault-write safety contract.
+emit_core_write_contract() {
+  local skill="$1"
+  [[ -f "$skill" ]] || return 1
+  awk '
+    /^### Optimistic concurrency for every write$/ { emit = 1 }
+    emit && /^## Route the request$/ { exit }
+    emit { print }
+  ' "$skill"
+}
+
 # ── Tool-name neutralization for non-Claude platforms ───────────────────────
 # Rewrites Claude Code tool references to platform-neutral wording so the
 # instructions still make sense in tools that don't have Claude's tool names.

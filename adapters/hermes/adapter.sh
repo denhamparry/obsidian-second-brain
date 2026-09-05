@@ -29,8 +29,9 @@ adapter_build() {
   local src="$1" dst="$2"
 
   HERMES_VERSION="$(_hermes_version "$src")"
+  HERMES_SKILL_MANIFEST="$src/SKILL.md"
   _hermes_emit_skills "$src/commands" "$dst/$HERMES_SKILLS_DIR"
-  _hermes_emit_blueprints "$dst/optional-skills"
+  _hermes_emit_blueprints "$src/references/scheduled-agents.md" "$dst/optional-skills"
   _hermes_copy_references "$src/references" "$dst/references"
   _hermes_copy_scripts "$src/scripts" "$dst/scripts"
   _hermes_copy_hooks "$src/hooks" "$dst/hooks"
@@ -103,6 +104,10 @@ _hermes_emit_skills() {
         echo "When the user's request matches any of: $trig_clean."
         echo
       fi
+      echo "## Universal vault-write safety"
+      echo
+      emit_core_write_contract "$HERMES_SKILL_MANIFEST"
+      echo
       echo "## Procedure"
       echo
       command_body "$f"
@@ -113,66 +118,42 @@ _hermes_emit_skills() {
   done
 }
 
-# Emit the four scheduled agents (SKILL.md "Scheduled Agents" section) as native
+# Emit the four scheduled agents from the focused scheduled-agent reference as native
 # Hermes blueprint skills - `metadata.hermes.blueprint` with a cron `schedule`.
 # They go under optional-skills/ (NOT skills/) on purpose: a blueprint arms as
 # soon as its skill is loaded, and the scheduled agents are opt-in by design
 # (the Claude side ships inert and requires explicit /schedule). optional-skills
 # require an explicit `hermes skills install <name>`, which preserves that
-# opt-in arming contract. SKILL.md remains the canonical source for the prompts.
+# opt-in arming contract. The focused reference remains the prompt source.
 _hermes_emit_blueprints() {
-  local dst="$1"
+  local schedule_ref="$1" dst="$2"
   mkdir -p "$dst"
 
   _hermes_write_blueprint "$dst" obsidian-morning "0 8 * * *" "daily at 8:00 AM" \
 "Create today's daily note and surface what needs attention. Runs unattended on schedule." \
-"Read \`_CLAUDE.md\`. Create today's daily note in \`Daily/\` using the Daily Note template.
-Pull in any tasks from kanban boards that are due today or overdue.
-List any projects with status active that have no recent activity in the last 7 days.
-Do not ask questions - infer everything from the vault. Save and stop."
+"$(_hermes_scheduled_prompt "$schedule_ref" "## Morning")"
 
   _hermes_write_blueprint "$dst" obsidian-nightly "0 22 * * *" "daily at 10:00 PM" \
 "Sleeptime consolidation - the vault gets smarter overnight. The cron-native counterpart to the Claude PostCompact maintenance pass." \
-"Read \`_CLAUDE.md\`. This is a sleeptime consolidation pass - the vault should be smarter when the user wakes up.
-
-Phase 1 - Close the day:
-- Read today's daily note. Append a ## End of Day section with a 3-5 bullet summary.
-- Move any completed kanban tasks to Done.
-
-Phase 2 - Reconcile:
-- Scan \`wiki/entities/\` for outdated roles, companies, or descriptions that conflict with newer daily notes.
-- Scan \`wiki/concepts/\` for claims contradicted by recently ingested sources.
-- Auto-resolve clear winners. Flag ambiguous ones in \`wiki/decisions/\`.
-
-Phase 3 - Synthesize:
-- Scan sources ingested today and yesterday. Find concepts that appear in 2+ unrelated sources.
-- If patterns found: create \`wiki/concepts/Synthesis - Title.md\` with evidence and interpretation.
-
-Phase 4 - Heal:
-- Find notes created today with no incoming links. Add links from relevant existing pages.
-- Close entity timeline entries missing an \"until\" date that should be closed.
-- Rebuild \`index.md\` to reflect today's changes.
-
-Phase 5 - Log:
-- Append to \`log.md\`: ## [YYYY-MM-DD] nightly | End of day + X reconciled, Y synthesized, Z orphans linked
-
-Do not ask questions. Do not fix anything destructive - only add, update, link. Save and stop."
+"$(_hermes_scheduled_prompt "$schedule_ref" "## Nightly")"
 
   _hermes_write_blueprint "$dst" obsidian-weekly "0 18 * * 5" "every Friday at 6:00 PM" \
 "Generate a weekly review note from the vault. Runs unattended on schedule." \
-"Read \`_CLAUDE.md\`. Run the obsidian-recap skill for the week to gather this week's activity.
-Generate a weekly review note using the Review template (or standard structure if none exists).
-Save to \`Reviews/YYYY-MM-DD - Weekly Review.md\`.
-Link it from this week's last daily note.
-Do not ask questions. Save and stop."
+"$(_hermes_scheduled_prompt "$schedule_ref" "## Weekly review")"
 
   _hermes_write_blueprint "$dst" obsidian-health-check "0 21 * * 0" "every Sunday at 9:00 PM" \
 "Run the vault health check and log a report (report only, never auto-fixes)." \
-"Read \`_CLAUDE.md\`. Run: \`uv run -m scripts.vault_health --path <vault> --json\`
-Parse the output. Write a health report to \`Knowledge/Vault Health YYYY-MM-DD.md\`
-summarizing findings by severity (critical, warning, info).
-Do not fix anything autonomously - only report.
-Do not ask questions. Save and stop."
+"$(_hermes_scheduled_prompt "$schedule_ref" "## Health check")"
+}
+
+_hermes_scheduled_prompt() {
+  local schedule_ref="$1" heading="$2"
+  awk -v heading="$heading" '
+    $0 == heading { section = 1; next }
+    section && $0 == "```text" { fence = 1; next }
+    fence && $0 == "```" { exit }
+    fence { print }
+  ' "$schedule_ref"
 }
 
 # _hermes_write_blueprint <dst> <name> <schedule> <human_time> <short_prompt> <body>
@@ -199,6 +180,10 @@ _hermes_write_blueprint() {
     echo "## When to use"
     echo
     echo "Runs automatically on its blueprint schedule ($human). Can also be run on demand. Opt-in: install with \`hermes skills install $name\` to arm the schedule."
+    echo
+    echo "## Universal vault-write safety"
+    echo
+    emit_core_write_contract "$HERMES_SKILL_MANIFEST"
     echo
     echo "## Procedure"
     echo

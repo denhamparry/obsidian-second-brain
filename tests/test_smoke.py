@@ -13,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -25,6 +24,61 @@ def _json_from_stdout(stdout: str) -> dict:
         if line.strip() == "{":
             return json.loads("\n".join(lines[index:]))
     raise AssertionError(f"JSON payload not found in stdout:\n{stdout}")
+
+
+def _core_write_contract() -> str:
+    skill = (REPO_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    start = skill.index("### Optimistic concurrency for every write")
+    end = skill.index("\n## Route the request", start)
+    return skill[start:end].strip()
+
+
+def _scheduled_prompt(heading: str) -> str:
+    reference = (REPO_ROOT / "references/scheduled-agents.md").read_text(
+        encoding="utf-8"
+    )
+    section = reference.split(heading, 1)[1]
+    return section.split("```text", 1)[1].split("```", 1)[0].strip()
+
+
+def test_all_platform_runtime_surfaces_include_core_write_contract():
+    """Every installed runtime must receive the canonical write-safety contract."""
+    result = subprocess.run(
+        ["bash", "scripts/build.sh"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    contract = _core_write_contract()
+    runtime_surfaces = {
+        "claude-code": REPO_ROOT / "dist/claude-code/SKILL.md",
+        "codex-cli": REPO_ROOT / "dist/codex-cli/AGENTS.md",
+        "gemini-cli": REPO_ROOT / "dist/gemini-cli/GEMINI.md",
+        "opencode": REPO_ROOT / "dist/opencode/AGENTS.md",
+        "pi": REPO_ROOT / "dist/pi/.pi/skills/obsidian-second-brain/SKILL.md",
+        "hermes-command": (
+            REPO_ROOT / "dist/hermes/skills/vault/obsidian-log/SKILL.md"
+        ),
+        "hermes-scheduled": (
+            REPO_ROOT / "dist/hermes/optional-skills/obsidian-nightly/SKILL.md"
+        ),
+    }
+    for platform, path in runtime_surfaces.items():
+        assert path.is_file(), platform
+        assert contract in path.read_text(encoding="utf-8"), platform
+
+    scheduled_blueprints = {
+        "## Morning": "obsidian-morning",
+        "## Nightly": "obsidian-nightly",
+        "## Weekly review": "obsidian-weekly",
+        "## Health check": "obsidian-health-check",
+    }
+    for heading, name in scheduled_blueprints.items():
+        blueprint = REPO_ROOT / f"dist/hermes/optional-skills/{name}/SKILL.md"
+        assert _scheduled_prompt(heading) in blueprint.read_text(encoding="utf-8"), name
 
 
 def test_codex_cli_build_generates_expected_files():

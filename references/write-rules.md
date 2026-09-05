@@ -171,11 +171,26 @@ tags:
 When updating an existing note (vs creating new), use targeted section injection:
 
 1. Read the full file
-2. Find the target section heading
-3. Append content below the last item in that section (before the next `---` or next `##`)
-4. Write back the full file with `write_file`
+2. Find the target section heading and retain the exact narrow anchor around the
+   insertion point.
+3. Immediately before mutation, reread the file. If the anchor changed, merge
+   the concurrent content and recompute the insertion.
+4. Apply a narrow conditional patch below the last item in that section (before
+   the next `---` or next `##`). Do not replace the whole file for a section
+   update.
+5. Retry an anchor conflict at most three times, then report the unresolved
+   target and conflicting section instead of overwriting it.
+6. Reread after success and verify both the requested update and all concurrent
+   content remain.
 
-For kanban boards: find the correct column heading, insert the new item above the last item in that column (or at top if empty).
+For kanban boards: find the correct column heading, insert the new item above
+the last item in that column (or at top if empty), and use that column as the
+narrow conditional anchor.
+
+Append-only operation logs are stricter: use an append primitive, require the
+complete pre-write content to remain an exact prefix afterward, and never use a
+truncate-and-rewrite path. The core `SKILL.md` concurrency contract is
+authoritative for filesystem and MCP writes.
 
 ---
 

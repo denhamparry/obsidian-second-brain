@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored `SKILL.md` into a concise safety and routing layer, with command,
+  research, bootstrap, scheduling, hook, and direct-update procedures loaded
+  only when selected. Direct filesystem and MCP note updates now follow an
+  explicit reread, narrow-mutation, merge, three-attempt retry, and post-write
+  verification contract that preserves concurrent entries and append-only
+  operation logs.
+
 ## [0.11.1] - 2026-06-28
 
 ### Added

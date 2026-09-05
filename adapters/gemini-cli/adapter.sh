@@ -46,6 +46,13 @@ agent) should follow when the user's request matches its trigger phrase.
    for every person/project/concept, recency markers per external claim,
    sources verbatim, confidence levels where applicable.
 
+## Universal vault-write safety
+EOF
+
+    emit_core_write_contract "$src/SKILL.md"
+
+    cat <<'EOF'
+
 ## Command routing tables (grouped by category)
 EOF
 
