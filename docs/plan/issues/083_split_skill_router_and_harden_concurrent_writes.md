@@ -53,7 +53,7 @@ reread/merge/retry behavior that never drops concurrent content.
 | Changelog | Record the router and concurrent-write hardening under `Unreleased`. |
 | Merge, deployment, and cleanup | Intentionally out of scope; leave one open cross-repository PR for user-managed review and merge. |
 
-The issue’s website links and model-guidance link are explanatory evidence, not
+The issue's website links and model-guidance link are explanatory evidence, not
 authorization to mutate the website repository or any live vault.
 
 ## Implementation
